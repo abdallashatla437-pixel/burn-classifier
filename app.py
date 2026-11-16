@@ -1,48 +1,41 @@
-import json
-import numpy as np
 import streamlit as st
-import tensorflow as tf
+import numpy as np
+from pathlib import Path
 from PIL import Image
+import tensorflow as tf
 
-st.set_page_config(page_title="Burn Type Classifier", page_icon="🩹")
+BASE_DIR = Path(__file__).parent
+CLASS_NAMES = ["first_degree", "second_degree", "third_degree"]  # same order as training
+IMG_SIZE = (224, 224)   # change if you trained with another size
+NORMALIZE = True        # set False if your model already has a Rescaling layer
 
 @st.cache_resource
 def load():
-    names = json.load(open("class_names.json"))
-    base = tf.keras.applications.MobileNetV2(
-        input_shape=(224, 224, 3), include_top=False, weights=None)
-    inputs = tf.keras.layers.Input(shape=(224, 224, 3))
-    x = base(inputs)
-    x = tf.keras.layers.GlobalAveragePooling2D()(x)
-    outputs = tf.keras.layers.Dense(len(names), activation="softmax")(x)
-    model = tf.keras.Model(inputs, outputs)
-    data = np.load("burn_weights.npz")
-    model.set_weights([data[f"arr_{i}"] for i in range(len(data.files))])
-    return model, names
+    files = list(BASE_DIR.glob("*.keras")) + list(BASE_DIR.glob("*.h5"))
+    if not files:
+        st.error("No model file (.keras or .h5) found next to app.py. Upload it to GitHub.")
+        st.stop()
+    model = tf.keras.models.load_model(files[0])
+    return model, CLASS_NAMES
 
 model, class_names = load()
 
-NICE = {
-    "first_degree": "First-degree burn",
-    "second_degree": "Second-degree burn",
-    "third_degree": "Third-degree burn",
-}
+st.title("Burn Classifier")
+uploaded = st.file_uploader("Upload a burn image", type=["jpg", "jpeg", "png"])
 
-st.title("Burn Type Classifier")
-st.caption("Student project. Not medical advice. See a doctor for any real burn.")
+if uploaded:
+    img = Image.open(uploaded).convert("RGB")
+    st.image(img, use_container_width=True)
 
-file = st.file_uploader("Upload a photo of the burn", type=["jpg", "jpeg", "png"])
+    x = np.array(img.resize(IMG_SIZE), dtype=np.float32)
+    if NORMALIZE:
+        x = x / 255.0
+    x = np.expand_dims(x, axis=0)
 
-if file:
-    img = Image.open(file).convert("RGB")
-    st.image(img, width=300)
+    probs = model.predict(x)[0]
+    best = int(np.argmax(probs))
 
-    arr = np.array(img.resize((224, 224)), dtype="float32")
-    arr = np.expand_dims(arr / 127.5 - 1.0, axis=0)
-    probs = model.predict(arr, verbose=0)[0]
-    idx = int(np.argmax(probs))
-
-    st.subheader(f"Result: {NICE.get(class_names[idx], class_names[idx])}")
-    for n, p in zip(class_names, probs):
-        st.write(f"{NICE.get(n, n)}: {p*100:.1f}%")
-        st.progress(float(p))
+    st.subheader(f"Prediction: {class_names[best]}")
+    st.write(f"Confidence: {probs[best] * 100:.1f}%")
+    for name, p in zip(class_names, probs):
+        st.progress(float(p), text=f"{name}: {p * 100:.1f}%")
